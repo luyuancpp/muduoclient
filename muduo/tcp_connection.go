@@ -23,7 +23,7 @@ func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
 	return reflection.Descriptor()
 }
 
-func (c *Connection) HandleWriteMsg() {
+func (c *Connection) HandleWriteMsgToBuffer() {
 	for {
 		m := <-c.M
 		data, err := Encode(&m)
@@ -31,17 +31,17 @@ func (c *Connection) HandleWriteMsg() {
 			log.Println(err)
 			return
 		}
-		c.WriteToBuffer(data)
+		c.writeToBuffer(data)
 	}
 }
 
-func (c *Connection) WriteToBuffer(data []byte) {
+func (c *Connection) writeToBuffer(data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.OutputBuffer.Write(data)
 }
 
-func (c *Connection) SendToConn() {
+func (c *Connection) writeBufferToConn() {
 	if c.OutputBuffer.Len() <= 0 {
 		return
 	}
@@ -54,11 +54,11 @@ func (c *Connection) SendToConn() {
 	}
 }
 
-func (c *Connection) HandleWrite() {
+func (c *Connection) HandleWriteBufferToMsg() {
 	for {
 		if c.NeedClose.Load() {
 			return
 		}
-		c.SendToConn()
+		c.writeBufferToConn()
 	}
 }

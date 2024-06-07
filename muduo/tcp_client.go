@@ -24,8 +24,8 @@ func NewClient(ip string, port int) (*Client, error) {
 		Conn: Connection{conn: conn, M: make(chan proto.Message, 20)},
 	}
 
-	go c.Conn.HandleWriteMsg()
-	go c.Conn.HandleWrite()
+	go c.Conn.HandleWriteMsgToBuffer()
+	go c.Conn.HandleWriteBufferToMsg()
 	return c, nil
 }
 
