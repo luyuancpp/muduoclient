@@ -54,7 +54,7 @@ func (c *Connection) writeBufferToConn() {
 	}
 }
 
-func (c *Connection) HandleWriteBufferToMsg() {
+func (c *Connection) HandleWriteBufferToConn() {
 	for {
 		if c.NeedClose.Load() {
 			return
