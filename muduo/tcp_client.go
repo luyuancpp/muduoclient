@@ -2,6 +2,7 @@ package muduo
 
 import (
 	"github.com/golang/protobuf/proto"
+	"log"
 )
 
 import (
@@ -16,7 +17,7 @@ type Client struct {
 func NewClient(ip string, port int) (*Client, error) {
 	conn, err := net.Dial("tcp", ip+":"+strconv.Itoa(port))
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 		return nil, err
 	}
 

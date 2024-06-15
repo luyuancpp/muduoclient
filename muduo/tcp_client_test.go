@@ -1,9 +1,7 @@
 package muduo
 
 import (
-	"github.com/luyuancpp/muduoclient/pb/game"
 	"testing"
-	"time"
 )
 
 func TestClient(t *testing.T) {
@@ -19,10 +17,10 @@ func TestClient(t *testing.T) {
 		}
 	}(client)
 
-	rq := &game.ClientRequest{Id: 1}
+	//rq := &game.ClientRequest{Id: 1}
 
-	for {
-		client.Send(rq)
-		time.Sleep(1 * time.Second)
-	}
+	//for {
+	//	client.Send(rq)
+	//	time.Sleep(1 * time.Second)
+	//}
 }
