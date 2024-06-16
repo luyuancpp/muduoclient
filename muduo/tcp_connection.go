@@ -67,32 +67,28 @@ func (c *Connection) HandleWriteBufferToConn() {
 }
 
 func (c *Connection) readBufferFromConn() {
-	c.MutexIn.Lock()
-	defer c.MutexIn.Unlock()
-	_, err := c.InputBuffer.ReadFrom(c.conn)
+	data := make([]byte, 1024)
+	n,err:=c.conn.Read(data)
 	if err != nil {
 		log.Println(err)
 		return
 	}
-}
+	c.InputBuffer.Write(data[0:n])
 
-func (c *Connection) HandleReadMsgFromBuffer() {
-	for {
-		msg, msgLen, err := Decode(c.InputBuffer.Bytes())
-		if err != nil {
-			log.Println(err)
-			return
-		}
-		if msgLen <= 0 {
-			return
-		}
-		c.InputBuffer.Truncate(int(msgLen))
-		list := c.InMsgList
-		list <- msg
+	msg, msgLen, err := Decode(c.InputBuffer.Bytes())
+	if err != nil {
+		log.Println(err)
+		return
 	}
+	if msgLen <= 0 {
+		return
+	}
+	c.InputBuffer.Truncate(int(msgLen))
+	c.InMsgList <- msg
 }
 
-func (c *Connection) HandleReadBufferFromConn() {
+
+func (c *Connection) HandleReadMsgFromConn() {
 	for {
 		if c.NeedClose.Load() {
 			return

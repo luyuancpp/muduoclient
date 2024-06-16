@@ -65,15 +65,16 @@ func Decode(data []byte) (proto.Message, uint32, error) {
 	}
 	pbNameLen := binary.BigEndian.Uint32(data[4:8])
 	index := pbNameLen + 8
-	pbTypeName := string(data[8:index])
+	pbTypeName := string(data[8:index-1])
 	msgName := protoreflect.FullName(pbTypeName)
 	msgType, err := protoregistry.GlobalTypes.FindMessageByName(msgName)
+
 	if err != nil {
 		log.Println(err)
 		return nil, lenData, err
 	}
 	msg := proto.MessageV1(msgType.New())
-	err = proto.Unmarshal(data, msg)
+	err = proto.Unmarshal(data[index: lenData], msg)
 	if err != nil {
 		return nil, lenData, err
 	}
