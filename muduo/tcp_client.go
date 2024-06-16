@@ -22,11 +22,16 @@ func NewClient(ip string, port int) (*Client, error) {
 	}
 
 	c := &Client{
-		Conn: Connection{conn: conn, M: make(chan proto.Message, 20)},
+		Conn: Connection{
+			conn:       conn,
+			OutMsgList: make(chan proto.Message, 20),
+			InMsgList:  make(chan proto.Message, 20)},
 	}
 
 	go c.Conn.HandleWriteMsgToBuffer()
 	go c.Conn.HandleWriteBufferToConn()
+	go c.Conn.HandleReadBufferFromConn()
+	go c.Conn.HandleReadMsgFromBuffer()
 	return c, nil
 }
 
@@ -35,5 +40,5 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Send(m proto.Message) {
-	c.Conn.M <- m
+	c.Conn.OutMsgList <- m
 }

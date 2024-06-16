@@ -3,22 +3,25 @@ package muduo
 import (
 	"encoding/binary"
 	"github.com/golang/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"hash/adler32"
+	"log"
 )
 
-func Encode(m *proto.Message) ([]byte, error) {
-	//from zinx
-	d := GetDescriptor(m)
+//from muduo codec.cc
+// struct ProtobufTransportFormat __attribute__ ((__packed__))
+// {
+//   int32_t  len;
+//   int32_t  nameLen;
+//   char     typeName[nameLen];
+//   char     protobufData[len-nameLen-8];
+//   int32_t  checkSum; // adler32 of nameLen, typeName and protobufData
+// }
 
-	/// A buffer class modeled after org.jboss.netty.buffer.ChannelBuffer
-	///
-	/// @code
-	/// +-------------------+------------------+------------------+
-	/// | prependable bytes |  readable bytes  |  writable bytes  |
-	/// |                   |     (CONTENT)    |                  |
-	/// +-------------------+------------------+------------------+
-	/// |                   |                  |                  |
-	/// 0      <=      readerIndex   <=   writerIndex    <=     size
+func Encode(m *proto.Message) ([]byte, error) {
+	//learn from zinx
+	d := GetDescriptor(m)
 
 	pbNameLenData := make([]byte, 4)
 	pbTypeName := d.Name() + " "
@@ -49,4 +52,32 @@ func Encode(m *proto.Message) ([]byte, error) {
 	data = append(data, dataPB...)
 
 	return data, nil
+}
+
+func Decode(data []byte) (proto.Message, uint32, error) {
+	//learn from zinx
+
+	if len(data) < 8 {
+		return nil, 0, nil
+	}
+	lenData := binary.BigEndian.Uint32(data[0:4])
+	if uint32(len(data)) < lenData {
+		return nil, 0, nil
+	}
+	pbNameLen := binary.BigEndian.Uint32(data[4:8])
+	index := pbNameLen + 8
+	pbTypeName := string(data[8:index])
+	msgName := protoreflect.FullName(pbTypeName)
+	msgType, err := protoregistry.GlobalTypes.FindMessageByName(msgName)
+	if err != nil {
+		log.Println(err)
+		return nil, lenData, err
+	}
+	msg := proto.MessageV1(msgType.New())
+	err = proto.Unmarshal(data, msg)
+	if err != nil {
+		return nil, lenData, err
+	}
+
+	return msg, lenData, nil
 }

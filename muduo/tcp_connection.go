@@ -13,9 +13,11 @@ import (
 type Connection struct {
 	conn         net.Conn
 	OutputBuffer bytes.Buffer
+	InputBuffer  bytes.Buffer
 	NeedClose    atomic.Bool
 	mu           sync.Mutex
-	M            chan proto.Message
+	OutMsgList   chan proto.Message
+	InMsgList    chan proto.Message
 }
 
 func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
@@ -25,7 +27,7 @@ func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
 
 func (c *Connection) HandleWriteMsgToBuffer() {
 	for {
-		m := <-c.M
+		m := <-c.OutMsgList
 		data, err := Encode(&m)
 		if err != nil {
 			log.Println(err)
@@ -60,5 +62,37 @@ func (c *Connection) HandleWriteBufferToConn() {
 			return
 		}
 		c.writeBufferToConn()
+	}
+}
+
+func (c *Connection) readBufferFromConn() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, err := c.InputBuffer.ReadFrom(c.conn)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+}
+
+func (c *Connection) HandleReadMsgFromBuffer() {
+	for {
+		msg, msgLen, err := Decode(c.InputBuffer.Bytes())
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		c.InputBuffer.Truncate(int(msgLen))
+		list := c.InMsgList
+		list <- msg
+	}
+}
+
+func (c *Connection) HandleReadBufferFromConn() {
+	for {
+		if c.NeedClose.Load() {
+			return
+		}
+		c.readBufferFromConn()
 	}
 }
