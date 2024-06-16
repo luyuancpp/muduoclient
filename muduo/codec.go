@@ -50,7 +50,6 @@ func Encode(m *proto.Message) ([]byte, error) {
 	data := make([]byte, 0)
 	data = append(data, lenData...)
 	data = append(data, dataPB...)
-
 	return data, nil
 }
 
@@ -78,6 +77,5 @@ func Decode(data []byte) (proto.Message, uint32, error) {
 	if err != nil {
 		return nil, lenData, err
 	}
-
 	return msg, lenData, nil
 }
