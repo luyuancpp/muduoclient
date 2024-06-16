@@ -15,7 +15,8 @@ type Connection struct {
 	OutputBuffer bytes.Buffer
 	InputBuffer  bytes.Buffer
 	NeedClose    atomic.Bool
-	mu           sync.Mutex
+	MutexOut     sync.Mutex
+	MutexIn      sync.Mutex
 	OutMsgList   chan proto.Message
 	InMsgList    chan proto.Message
 }
@@ -38,8 +39,8 @@ func (c *Connection) HandleWriteMsgToBuffer() {
 }
 
 func (c *Connection) writeToBuffer(data []byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.MutexOut.Lock()
+	defer c.MutexOut.Unlock()
 	c.OutputBuffer.Write(data)
 }
 
@@ -47,8 +48,8 @@ func (c *Connection) writeBufferToConn() {
 	if c.OutputBuffer.Len() <= 0 {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.MutexOut.Lock()
+	defer c.MutexOut.Unlock()
 	_, err := c.OutputBuffer.WriteTo(c.conn)
 	if err != nil {
 		log.Println(err)
@@ -66,8 +67,8 @@ func (c *Connection) HandleWriteBufferToConn() {
 }
 
 func (c *Connection) readBufferFromConn() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.MutexIn.Lock()
+	defer c.MutexIn.Unlock()
 	_, err := c.InputBuffer.ReadFrom(c.conn)
 	if err != nil {
 		log.Println(err)
@@ -80,6 +81,9 @@ func (c *Connection) HandleReadMsgFromBuffer() {
 		msg, msgLen, err := Decode(c.InputBuffer.Bytes())
 		if err != nil {
 			log.Println(err)
+			return
+		}
+		if msgLen <= 0 {
 			return
 		}
 		c.InputBuffer.Truncate(int(msgLen))
