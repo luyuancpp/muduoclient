@@ -30,7 +30,8 @@ func NewClient(ip string, port int) (*Client, error) {
 
 	go c.Conn.HandleWriteMsgToBuffer()
 	go c.Conn.HandleWriteBufferToConn()
-	go c.Conn.HandleReadMsgFromConn()
+	go c.Conn.HandleReadBufferFromConn()
+	go c.Conn.HandleReadMsgFromBuff()
 	return c, nil
 }
 

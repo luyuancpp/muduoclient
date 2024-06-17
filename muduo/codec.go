@@ -55,28 +55,34 @@ func Encode(m *proto.Message) ([]byte, error) {
 
 func Decode(data []byte) (proto.Message, uint32, error) {
 	//learn from zinx
-
 	if len(data) < 8 {
 		return nil, 0, nil
 	}
-	lenData := binary.BigEndian.Uint32(data[0:4])
-	if uint32(len(data)) < lenData {
+	length := binary.BigEndian.Uint32(data[0:4])
+	if uint32(len(data)) < length {
 		return nil, 0, nil
 	}
+
 	pbNameLen := binary.BigEndian.Uint32(data[4:8])
-	index := pbNameLen + 8
-	pbTypeName := string(data[8:index-1])
+	dataIndex := pbNameLen + 8
+	pbTypeName := string(data[8: dataIndex-1])
 	msgName := protoreflect.FullName(pbTypeName)
 	msgType, err := protoregistry.GlobalTypes.FindMessageByName(msgName)
-
 	if err != nil {
 		log.Println(err)
-		return nil, lenData, err
+		return nil, length, err
 	}
 	msg := proto.MessageV1(msgType.New())
-	err = proto.Unmarshal(data[index: lenData], msg)
+	err = proto.Unmarshal(data[dataIndex:length], msg)
 	if err != nil {
-		return nil, lenData, err
+		return nil, length, err
 	}
-	return msg, lenData, nil
+
+	checkSum := adler32.Checksum(data[4:length])
+	checkSumData := binary.BigEndian.Uint32(data[length : length+ 4])
+	if checkSum != checkSumData {
+		log.Println("checksum")
+	}
+	length += 4
+	return msg, length, nil
 }
