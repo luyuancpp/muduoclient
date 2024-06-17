@@ -63,10 +63,9 @@ func Decode(data []byte) (proto.Message, uint32, error) {
 		return nil, 0, nil
 	}
 
-	pbNameLen := binary.BigEndian.Uint32(data[4:8])
-	dataIndex := pbNameLen + 8
-	pbTypeName := string(data[8: dataIndex-1])
-	msgName := protoreflect.FullName(pbTypeName)
+	msgNameLen := binary.BigEndian.Uint32(data[4:8])
+	dataIndex := msgNameLen + 8
+	msgName := protoreflect.FullName(string(data[8 : dataIndex-1]))
 	msgType, err := protoregistry.GlobalTypes.FindMessageByName(msgName)
 	if err != nil {
 		log.Println(err)
@@ -79,7 +78,7 @@ func Decode(data []byte) (proto.Message, uint32, error) {
 	}
 
 	checkSum := adler32.Checksum(data[4:length])
-	checkSumData := binary.BigEndian.Uint32(data[length : length+ 4])
+	checkSumData := binary.BigEndian.Uint32(data[length : length+4])
 	if checkSum != checkSumData {
 		log.Println("checksum")
 	}

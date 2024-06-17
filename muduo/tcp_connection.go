@@ -77,13 +77,17 @@ func (c *Connection) readMsgFromBuff() {
 	if msgLen <= 0 {
 		return
 	}
-	c.InputBuffer.Read(make([]byte, msgLen))
+	_, err = c.InputBuffer.Read(make([]byte, msgLen))
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	c.InMsgList <- msg
 }
 
-func (c *Connection) readBufferFromConn()  {
+func (c *Connection) readBufferFromConn() {
 	data := make([]byte, 512)
-	n,err:=c.conn.Read(data)
+	n, err := c.conn.Read(data)
 	if n == 0 {
 		c.NeedClose.Store(true)
 		return
@@ -97,8 +101,8 @@ func (c *Connection) readBufferFromConn()  {
 	c.InputBuffer.Write(data[0:n])
 }
 
-func (c *Connection)HandleReadBufferFromConn()  {
-	for  {
+func (c *Connection) HandleReadBufferFromConn() {
+	for {
 		if c.NeedClose.Load() {
 			return
 		}
