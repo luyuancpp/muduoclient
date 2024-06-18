@@ -14,7 +14,7 @@ type Client struct {
 	Conn Connection
 }
 
-func NewClient(ip string, port int) (*Client, error) {
+func NewClient(ip string, port int, codec Codec) (*Client, error) {
 	conn, err := net.Dial("tcp", ip+":"+strconv.Itoa(port))
 	if err != nil {
 		log.Fatal(err)
@@ -25,7 +25,9 @@ func NewClient(ip string, port int) (*Client, error) {
 		Conn: Connection{
 			conn:       conn,
 			OutMsgList: make(chan proto.Message, 20),
-			InMsgList:  make(chan proto.Message, 20)},
+			InMsgList:  make(chan proto.Message, 20),
+			Codec:      codec,
+		},
 	}
 
 	go c.Conn.HandleWriteMsgToBuffer()

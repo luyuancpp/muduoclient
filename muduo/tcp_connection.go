@@ -19,6 +19,7 @@ type Connection struct {
 	MutexIn      sync.Mutex
 	OutMsgList   chan proto.Message
 	InMsgList    chan proto.Message
+	Codec        Codec
 }
 
 func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
@@ -29,7 +30,7 @@ func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
 func (c *Connection) HandleWriteMsgToBuffer() {
 	for {
 		m := <-c.OutMsgList
-		data, err := Encode(&m)
+		data, err := c.Codec.Encode(&m)
 		if err != nil {
 			log.Println(err)
 			return
@@ -69,7 +70,7 @@ func (c *Connection) HandleWriteBufferToConn() {
 func (c *Connection) readMsgFromBuff() {
 	c.MutexIn.Lock()
 	defer c.MutexIn.Unlock()
-	msg, msgLen, err := Decode(c.InputBuffer.Bytes())
+	msg, msgLen, err := c.Codec.Decode(c.InputBuffer.Bytes())
 	if err != nil {
 		log.Println(err)
 		return

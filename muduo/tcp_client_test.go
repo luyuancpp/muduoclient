@@ -5,7 +5,7 @@ import (
 )
 
 func TestClient(t *testing.T) {
-	client, err := NewClient("127.0.0.1", 8000)
+	client, err := NewClient("127.0.0.1", 6000, &TcpCodec{})
 	if err != nil {
 		panic(err)
 	}
@@ -17,10 +17,4 @@ func TestClient(t *testing.T) {
 		}
 	}(client)
 
-	//rq := &game.ClientRequest{Id: 1}
-
-	//for {
-	//	client.Send(rq)
-	//	time.Sleep(1 * time.Second)
-	//}
 }
