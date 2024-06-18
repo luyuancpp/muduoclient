@@ -105,7 +105,7 @@ func (c *TcpCodec) Decode(data []byte) (proto.Message, uint32, error) {
 // checksum  4-byte  adler32 of "RPC0"+payload
 type RpcCodec struct {
 	Codec
-	RpcMsgType *proto.Message
+	RpcMsgType proto.Message
 }
 
 func (c *RpcCodec) Encode(m *proto.Message) ([]byte, error) {
@@ -149,7 +149,7 @@ func (c *RpcCodec) Decode(data []byte) (proto.Message, uint32, error) {
 		return nil, 0, nil
 	}
 
-	msgName := protoreflect.FullName(GetDescriptor(c.RpcMsgType).FullName())
+	msgName := protoreflect.FullName(GetDescriptor(&c.RpcMsgType).FullName())
 	msgType, err := protoregistry.GlobalTypes.FindMessageByName(msgName)
 	if err != nil {
 		log.Println(err)
