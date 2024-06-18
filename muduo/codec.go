@@ -110,10 +110,8 @@ type RpcCodec struct {
 
 func (c *RpcCodec) Encode(m *proto.Message) ([]byte, error) {
 	//learn from zinx
-	d := GetDescriptor(m)
 
-	RPC0 := d.Name()
-	tagData := []byte(RPC0)
+	tagData := []byte("RPC0")
 
 	msgBodyData, err := proto.Marshal(*m)
 	if err != nil {
