@@ -15,7 +15,8 @@ type Client struct {
 }
 
 func NewClient(ip string, port int, codec Codec) (*Client, error) {
-	conn, err := net.Dial("tcp", ip+":"+strconv.Itoa(port))
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
+	conn, err := Connect(addr)
 	if err != nil {
 		log.Fatal(err)
 		return nil, err
@@ -23,10 +24,11 @@ func NewClient(ip string, port int, codec Codec) (*Client, error) {
 
 	c := &Client{
 		Conn: Connection{
-			conn:       conn,
+			Conn:       conn,
 			OutMsgList: make(chan proto.Message, 20),
 			InMsgList:  make(chan proto.Message, 20),
 			Codec:      codec,
+			Addr:       addr,
 		},
 	}
 
@@ -38,7 +40,7 @@ func NewClient(ip string, port int, codec Codec) (*Client, error) {
 }
 
 func (c *Client) Close() error {
-	return c.Conn.conn.Close()
+	return c.Conn.Conn.Close()
 }
 
 func (c *Client) Send(m proto.Message) {

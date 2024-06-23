@@ -2,16 +2,18 @@ package muduo
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/golang/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"log"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Connection struct {
-	conn         net.Conn
+	Conn         net.Conn
 	OutputBuffer bytes.Buffer
 	InputBuffer  bytes.Buffer
 	NeedClose    atomic.Bool
@@ -20,6 +22,7 @@ type Connection struct {
 	OutMsgList   chan proto.Message
 	InMsgList    chan proto.Message
 	Codec        Codec
+	Addr         string
 }
 
 func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
@@ -51,7 +54,7 @@ func (c *Connection) writeBufferToConn() {
 	}
 	c.MutexOut.Lock()
 	defer c.MutexOut.Unlock()
-	_, err := c.OutputBuffer.WriteTo(c.conn)
+	_, err := c.OutputBuffer.WriteTo(c.Conn)
 	if err != nil {
 		log.Println(err)
 		return
@@ -86,11 +89,31 @@ func (c *Connection) readMsgFromBuff() {
 	c.InMsgList <- msg
 }
 
+func Connect(addr string) (net.Conn, error) {
+	var conn net.Conn
+	var err error
+	for {
+		conn, err = net.Dial("tcp", addr)
+		if err == nil {
+			break
+		}
+		fmt.Println("connect fail:", err)
+		time.Sleep(100 * time.Millisecond)
+	}
+	return conn, nil
+}
+
 func (c *Connection) readBufferFromConn() {
 	data := make([]byte, 512)
-	n, err := c.conn.Read(data)
+	n, err := c.Conn.Read(data)
 	if n == 0 {
-		c.NeedClose.Store(true)
+		//golang tcp 断线重连
+		conn, err := Connect(c.Addr)
+		if err != nil {
+			log.Println("reconnect fail:", err)
+			return
+		}
+		c.Conn = conn
 		return
 	}
 	if err != nil {
