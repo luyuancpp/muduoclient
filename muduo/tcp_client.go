@@ -25,17 +25,15 @@ func NewClient(ip string, port int, codec Codec) (*Client, error) {
 	c := &Client{
 		Conn: Connection{
 			Conn:       conn,
-			OutMsgList: make(chan proto.Message, 20),
-			InMsgList:  make(chan proto.Message, 20),
+			OutMsgList: make(chan proto.Message, 100),
+			InMsgList:  make(chan proto.Message, 100),
 			Codec:      codec,
 			Addr:       addr,
 		},
 	}
 
 	go c.Conn.HandleWriteMsgToBuffer()
-	go c.Conn.HandleWriteBufferToConn()
 	go c.Conn.HandleReadBufferFromConn()
-	go c.Conn.HandleReadMsgFromBuff()
 	return c, nil
 }
 

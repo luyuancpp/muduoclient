@@ -33,60 +33,23 @@ func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
 func (c *Connection) HandleWriteMsgToBuffer() {
 	for {
 		m := <-c.OutMsgList
+
 		data, err := c.Codec.Encode(&m)
+
 		if err != nil {
 			log.Println(err)
 			return
 		}
-		c.writeToBuffer(data)
-	}
-}
 
-func (c *Connection) writeToBuffer(data []byte) {
-	c.MutexOut.Lock()
-	defer c.MutexOut.Unlock()
-	c.OutputBuffer.Write(data)
-}
+		c.OutputBuffer.Write(data)
 
-func (c *Connection) writeBufferToConn() {
-	if c.OutputBuffer.Len() <= 0 {
-		return
-	}
-	c.MutexOut.Lock()
-	defer c.MutexOut.Unlock()
-	_, err := c.OutputBuffer.WriteTo(c.Conn)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-}
+		_, err = c.OutputBuffer.WriteTo(c.Conn)
 
-func (c *Connection) HandleWriteBufferToConn() {
-	for {
-		if c.NeedClose.Load() {
+		if err != nil {
+			log.Println(err)
 			return
 		}
-		c.writeBufferToConn()
 	}
-}
-
-func (c *Connection) readMsgFromBuff() {
-	c.MutexIn.Lock()
-	defer c.MutexIn.Unlock()
-	msg, msgLen, err := c.Codec.Decode(c.InputBuffer.Bytes())
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	if msgLen <= 0 {
-		return
-	}
-	_, err = c.InputBuffer.Read(make([]byte, msgLen))
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	c.InMsgList <- msg
 }
 
 func Connect(addr string) (net.Conn, error) {
@@ -103,42 +66,50 @@ func Connect(addr string) (net.Conn, error) {
 	return conn, nil
 }
 
-func (c *Connection) readBufferFromConn() {
-	data := make([]byte, 512)
-	n, err := c.Conn.Read(data)
-	if n == 0 {
-		//golang tcp 断线重连
-		conn, err := Connect(c.Addr)
-		if err != nil {
-			log.Println("reconnect fail:", err)
-			return
-		}
-		c.Conn = conn
-		return
-	}
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	c.MutexIn.Lock()
-	defer c.MutexIn.Unlock()
-	c.InputBuffer.Write(data[0:n])
-}
-
 func (c *Connection) HandleReadBufferFromConn() {
 	for {
 		if c.NeedClose.Load() {
 			return
 		}
-		c.readBufferFromConn()
-	}
-}
 
-func (c *Connection) HandleReadMsgFromBuff() {
-	for {
-		if c.NeedClose.Load() {
+		data := make([]byte, 512)
+		n, err := c.Conn.Read(data)
+
+		if n == 0 {
+			//golang tcp 断线重连
+			conn, err := Connect(c.Addr)
+			if err != nil {
+				log.Println("reconnect fail:", err)
+				return
+			}
+			c.Conn = conn
 			return
 		}
-		c.readMsgFromBuff()
+
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		c.InputBuffer.Write(data[0:n])
+
+		msg, msgLen, err := c.Codec.Decode(c.InputBuffer.Bytes())
+
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		if msgLen <= 0 {
+			continue
+		}
+
+		_, err = c.InputBuffer.Read(make([]byte, msgLen))
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		c.InMsgList <- msg
 	}
 }
