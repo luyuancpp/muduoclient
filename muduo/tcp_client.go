@@ -11,25 +11,19 @@ import (
 )
 
 type Client struct {
-	Conn Connection
+	Conn *Connection
 }
 
 func NewClient(ip string, port int, codec Codec) (*Client, error) {
 	addr := net.JoinHostPort(ip, strconv.Itoa(port))
-	conn, err := Connect(addr)
+	conn, err := NewConnection(addr, codec)
 	if err != nil {
 		log.Fatal(err)
 		return nil, err
 	}
 
 	c := &Client{
-		Conn: Connection{
-			Conn:       conn,
-			OutMsgList: make(chan proto.Message, 100),
-			InMsgList:  make(chan proto.Message, 100),
-			Codec:      codec,
-			Addr:       addr,
-		},
+		Conn: conn,
 	}
 
 	go c.Conn.HandleWriteMsgToBuffer()
@@ -38,9 +32,16 @@ func NewClient(ip string, port int, codec Codec) (*Client, error) {
 }
 
 func (c *Client) Close() error {
+	c.Conn.NeedClose.Store(true)
+	close(c.Conn.OutMsgList)
+	close(c.Conn.InMsgList)
 	return c.Conn.Conn.Close()
 }
 
 func (c *Client) Send(m proto.Message) {
 	c.Conn.OutMsgList <- m
+}
+
+func (c *Client) Recv() proto.Message {
+	return <-c.Conn.InMsgList
 }
