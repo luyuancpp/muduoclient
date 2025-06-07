@@ -51,7 +51,11 @@ func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
 
 func (c *Connection) HandleWriteMsgToBuffer() {
 	for {
-		msg := <-c.OutMsgList
+		msg, ok := <-c.OutMsgList
+		if !ok {
+			log.Println("OutMsgList closed, stopping writer")
+			return
+		}
 
 		data, err := c.Codec.Encode(&msg)
 		if err != nil {
@@ -59,23 +63,21 @@ func (c *Connection) HandleWriteMsgToBuffer() {
 			continue
 		}
 
-		{
-			c.MutexOut.Lock()
-			defer c.MutexOut.Unlock()
-
-			total := 0
-			for total < len(data) {
-				n, err := c.Conn.Write(data[total:])
-				if err != nil {
-					log.Println("Write error:", err)
-					return
-				}
-				total += n
+		c.MutexOut.Lock()
+		total := 0
+		for total < len(data) {
+			n, err := c.Conn.Write(data[total:])
+			if err != nil {
+				log.Println("Write error:", err)
+				c.MutexOut.Unlock()
+				return
 			}
+			total += n
 		}
-
+		c.MutexOut.Unlock()
 	}
 }
+
 
 func Connect(addr string) (net.Conn, error) {
 	for {
