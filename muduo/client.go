@@ -26,15 +26,12 @@ func NewClient(ip string, port int, codec Codec) (*Client, error) {
 		Conn: conn,
 	}
 
-	go c.Conn.HandleWriteMsgToBuffer()
-	go c.Conn.HandleReadBufferFromConn()
 	return c, nil
 }
 
 func (c *Client) Close() error {
 	c.Conn.NeedClose.Store(true)
-	close(c.Conn.OutMsgList)
-	close(c.Conn.InMsgList)
+	c.Conn.Close()
 	return c.Conn.Conn.Close()
 }
 
