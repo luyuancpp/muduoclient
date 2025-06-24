@@ -17,24 +17,25 @@ type Connection struct {
 	addr  string
 	codec Codec
 
-	netConn net.Conn // 原: conn
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	netConn net.Conn // 原 conn
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	incoming chan proto.Message
 	outgoing chan proto.Message
 
-	recvBuffer  bytes.Buffer // 原: buffer
+	recvBuffer  bytes.Buffer // 原 buffer
 	bufferMutex sync.Mutex
-	closed      atomic.Bool
 	writeMutex  sync.Mutex
+	closed      atomic.Bool
 }
 
 // NewConnection 创建连接并启动管理协程，自动重连
 func NewConnection(addr string, codec Codec) *Connection {
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Connection{
+	conn := &Connection{
 		addr:     addr,
 		codec:    codec,
 		ctx:      ctx,
@@ -42,9 +43,9 @@ func NewConnection(addr string, codec Codec) *Connection {
 		incoming: make(chan proto.Message, 100),
 		outgoing: make(chan proto.Message, 100),
 	}
-	c.wg.Add(1)
-	go c.connectionManager()
-	return c
+	conn.wg.Add(1)
+	go conn.connectionManager()
+	return conn
 }
 
 func (conn *Connection) connectionManager() {
@@ -75,7 +76,6 @@ func (conn *Connection) connectionManager() {
 
 		var rwGroup sync.WaitGroup
 		rwGroup.Add(2)
-
 		go func() {
 			defer rwGroup.Done()
 			conn.readLoop(readCtx, readCancel)
@@ -87,6 +87,7 @@ func (conn *Connection) connectionManager() {
 
 		rwGroup.Wait()
 
+		// 清理连接
 		conn.closeConn()
 
 		if conn.IsClosed() {
@@ -98,21 +99,21 @@ func (conn *Connection) connectionManager() {
 	}
 }
 
-func (c *Connection) setConn(conn net.Conn) {
-	c.writeMutex.Lock()
-	defer c.writeMutex.Unlock()
-	if c.netConn != nil {
-		_ = c.netConn.Close()
+func (conn *Connection) setConn(netConn net.Conn) {
+	conn.writeMutex.Lock()
+	defer conn.writeMutex.Unlock()
+	if conn.netConn != nil {
+		_ = conn.netConn.Close()
 	}
-	c.netConn = conn
+	conn.netConn = netConn
 }
 
-func (c *Connection) closeConn() {
-	c.writeMutex.Lock()
-	defer c.writeMutex.Unlock()
-	if c.netConn != nil {
-		_ = c.netConn.Close()
-		c.netConn = nil
+func (conn *Connection) closeConn() {
+	conn.writeMutex.Lock()
+	defer conn.writeMutex.Unlock()
+	if conn.netConn != nil {
+		_ = conn.netConn.Close()
+		conn.netConn = nil
 	}
 }
 
@@ -202,21 +203,21 @@ func (conn *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc
 
 			_ = netConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
-			total := 0
-			for total < len(data) {
-				n, err := netConn.Write(data[total:])
+			totalWritten := 0
+			for totalWritten < len(data) {
+				n, err := netConn.Write(data[totalWritten:])
 				if err != nil {
 					log.Println("Write error:", err)
 					return
 				}
-				total += n
+				totalWritten += n
 			}
 		}
 	}
 }
 
-func (c *Connection) Send(msg proto.Message) (err error) {
-	if c.IsClosed() {
+func (conn *Connection) Send(message proto.Message) (err error) {
+	if conn.IsClosed() {
 		return errors.New("connection closed")
 	}
 	defer func() {
@@ -225,33 +226,31 @@ func (c *Connection) Send(msg proto.Message) (err error) {
 		}
 	}()
 	select {
-	case c.outgoing <- msg:
+	case conn.outgoing <- message:
 		return nil
 	default:
 		return errors.New("send buffer full")
 	}
 }
 
-func (c *Connection) Recv() (proto.Message, error) {
-	msg, ok := <-c.incoming
+func (conn *Connection) Recv() (proto.Message, error) {
+	message, ok := <-conn.incoming
 	if !ok {
 		return nil, errors.New("connection closed")
 	}
-	return msg, nil
+	return message, nil
 }
 
-func (c *Connection) Close() {
-	if c.closed.CompareAndSwap(false, true) {
-		c.cancel()
-		c.closeConn()
-		// outgoing 关闭后，写协程才能退出
-		close(c.outgoing)
-		// 不关闭 incoming，避免 panic（由接收方决定关闭）
-		c.wg.Wait()
+func (conn *Connection) Close() {
+	if conn.closed.CompareAndSwap(false, true) {
+		conn.cancel()
+		conn.closeConn()
+		close(conn.outgoing) // outgoing 关闭后，写协程才能退出
+		conn.wg.Wait()
 		log.Println("Connection closed cleanly")
 	}
 }
 
-func (c *Connection) IsClosed() bool {
-	return c.closed.Load()
+func (conn *Connection) IsClosed() bool {
+	return conn.closed.Load()
 }
