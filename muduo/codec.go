@@ -28,6 +28,13 @@ type TcpCodec struct {
 	Codec
 }
 
+func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
+	if m == nil {
+		return nil
+	}
+	return proto.MessageReflect(*m).Descriptor()
+}
+
 func (c *TcpCodec) Encode(m *proto.Message) ([]byte, error) {
 	//learn from zinx
 	d := GetDescriptor(m)

@@ -2,7 +2,6 @@ package muduo
 
 import (
 	"github.com/golang/protobuf/proto"
-	"log"
 )
 
 import (
@@ -16,11 +15,7 @@ type Client struct {
 
 func NewClient(ip string, port int, codec Codec) (*Client, error) {
 	addr := net.JoinHostPort(ip, strconv.Itoa(port))
-	conn, err := NewConnection(addr, codec)
-	if err != nil {
-		log.Fatal(err)
-		return nil, err
-	}
+	conn := NewConnection(addr, codec)
 
 	c := &Client{
 		Conn: conn,
@@ -29,16 +24,17 @@ func NewClient(ip string, port int, codec Codec) (*Client, error) {
 	return c, nil
 }
 
-func (c *Client) Close() error {
-	c.Conn.NeedClose.Store(true)
+func (c *Client) Close() {
 	c.Conn.Close()
-	return c.Conn.Conn.Close()
 }
 
 func (c *Client) Send(m proto.Message) {
-	c.Conn.OutMsgList <- m
+	err := c.Conn.Send(m)
+	if err != nil {
+		return
+	}
 }
 
-func (c *Client) Recv() proto.Message {
-	return <-c.Conn.InMsgList
+func (c *Client) Recv() (proto.Message, error) {
+	return c.Conn.Recv()
 }

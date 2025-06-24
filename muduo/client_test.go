@@ -11,10 +11,6 @@ func TestClient(t *testing.T) {
 	}
 
 	defer func(client *Client) {
-		err := client.Close()
-		if err != nil {
-			panic(err)
-		}
+		client.Close()
 	}(client)
-
 }
