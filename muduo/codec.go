@@ -10,167 +10,159 @@ import (
 )
 
 type Codec interface {
-	Encode(m *proto.Message) ([]byte, error)
+	Encode(message *proto.Message) ([]byte, error)
 	Decode(data []byte) (proto.Message, uint32, error)
 }
 
-//from muduo codec.cc
-// struct ProtobufTransportFormat __attribute__ ((__packed__))
-// {
-//   int32_t  len;
-//   int32_t  nameLen;
-//   char     typeName[nameLen];
-//   char     protobufData[len-nameLen-8];
-//   int32_t  checkSum; // adler32 of nameLen, typeName and protobufData
-// }
-
+// TcpCodec 实现 muduo 的 Protobuf 编码格式
 type TcpCodec struct {
 	Codec
 }
 
-func GetDescriptor(m *proto.Message) protoreflect.MessageDescriptor {
-	if m == nil {
+func GetDescriptor(message *proto.Message) protoreflect.MessageDescriptor {
+	if message == nil {
 		return nil
 	}
-	return proto.MessageReflect(*m).Descriptor()
+	return proto.MessageReflect(*message).Descriptor()
 }
 
-func (c *TcpCodec) Encode(m *proto.Message) ([]byte, error) {
-	//learn from zinx
-	d := GetDescriptor(m)
+func (c *TcpCodec) Encode(message *proto.Message) ([]byte, error) {
+	desc := GetDescriptor(message)
 
-	msgNameLenData := make([]byte, 4)
-	msgTypeName := d.Name() + " "
-	binary.BigEndian.PutUint32(msgNameLenData, uint32(len(msgTypeName)))
-	msgTypeNameData := []byte(msgTypeName)
+	// TypeName 长度（包括一个额外的空格）
+	typeName := desc.Name() + " "
+	typeNameBytes := []byte(typeName)
+	typeNameLen := len(typeNameBytes)
 
-	msgBodyData, err := proto.Marshal(*m)
+	// 消息体
+	bodyBytes, err := proto.Marshal(*message)
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
 
-	dataMSG := make([]byte, 0)
+	// 构建 msg 数据部分
+	msgData := make([]byte, 0, 4+typeNameLen+len(bodyBytes)+4)
+	nameLenBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(nameLenBuf, uint32(typeNameLen))
+	msgData = append(msgData, nameLenBuf...)
+	msgData = append(msgData, typeNameBytes...)
+	msgData = append(msgData, bodyBytes...)
 
-	dataMSG = append(dataMSG, msgNameLenData...)
-	dataMSG = append(dataMSG, msgTypeNameData...)
-	dataMSG = append(dataMSG, msgBodyData...)
+	// 校验和
+	checksum := adler32.Checksum(msgData)
+	checksumBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksumBuf, checksum)
+	msgData = append(msgData, checksumBuf...)
 
-	checkSum := adler32.Checksum(dataMSG)
-	checkSumData := make([]byte, 4)
-	binary.BigEndian.PutUint32(checkSumData, checkSum)
-	dataMSG = append(dataMSG, checkSumData...)
+	// 长度前缀
+	totalLen := uint32(len(msgData))
+	lengthBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(lengthBuf, totalLen)
 
-	lenMSG := len(dataMSG)
-	lenData := make([]byte, 4)
-	binary.BigEndian.PutUint32(lenData, uint32(lenMSG))
-	data := make([]byte, 0)
-	data = append(data, lenData...)
-	data = append(data, dataMSG...)
-	return data, nil
+	fullPacket := append(lengthBuf, msgData...)
+	return fullPacket, nil
 }
 
 func (c *TcpCodec) Decode(data []byte) (proto.Message, uint32, error) {
-	//learn from zinx
 	if len(data) < 8 {
 		return nil, 0, nil
 	}
-	length := binary.BigEndian.Uint32(data[0:4])
-	if uint32(len(data)) < length {
+
+	totalLen := binary.BigEndian.Uint32(data[0:4])
+	if uint32(len(data)) < totalLen+4 {
 		return nil, 0, nil
 	}
 
-	msgNameLen := binary.BigEndian.Uint32(data[4:8])
-	dataIndex := msgNameLen + 8
-	msgName := protoreflect.FullName(string(data[8 : dataIndex-1]))
-	msgType, err := protoregistry.GlobalTypes.FindMessageByName(msgName)
-	if err != nil {
-		log.Println(err)
-		return nil, length, err
+	nameLen := binary.BigEndian.Uint32(data[4:8])
+	typeNameEnd := 8 + nameLen
+	if uint32(len(data)) < typeNameEnd {
+		return nil, 0, nil
 	}
+
+	typeName := protoreflect.FullName(string(data[8 : typeNameEnd-1])) // 去除多余空格
+	msgType, err := protoregistry.GlobalTypes.FindMessageByName(typeName)
+	if err != nil {
+		log.Println("Decode error: message type not found:", err)
+		return nil, totalLen, err
+	}
+
 	msg := proto.MessageV1(msgType.New())
-	err = proto.Unmarshal(data[dataIndex:length], msg)
+	bodyStart := typeNameEnd
+	bodyEnd := totalLen
+	err = proto.Unmarshal(data[bodyStart:bodyEnd], msg)
 	if err != nil {
-		return nil, length, err
+		return nil, totalLen, err
 	}
 
-	checkSum := adler32.Checksum(data[4:length])
-	checkSumData := binary.BigEndian.Uint32(data[length : length+4])
-	if checkSum != checkSumData {
-		log.Println("checksum")
+	calculatedChecksum := adler32.Checksum(data[4:totalLen])
+	expectedChecksum := binary.BigEndian.Uint32(data[totalLen : totalLen+4])
+	if calculatedChecksum != expectedChecksum {
+		log.Println("Checksum mismatch")
 	}
-	length += 4
-	return msg, length, nil
-}
 
-// wire format
-//
-// # Field     Length  Content
-//
-// size      4-byte  N+8
-// "RPC0"    4-byte
-// payload   N-byte
-// checksum  4-byte  adler32 of "RPC0"+payload
+	return msg, totalLen + 4, nil
+} // RpcCodec 实现带固定标签 "RPC0" 的 Protobuf 编解码器
 type RpcCodec struct {
 	Codec
 	RpcMsgType proto.Message
 }
 
-func (c *RpcCodec) Encode(m *proto.Message) ([]byte, error) {
-	//learn from zinx
+func (c *RpcCodec) Encode(message *proto.Message) ([]byte, error) {
+	tag := []byte("RPC0")
 
-	tagData := []byte("RPC0")
-
-	msgBodyData, err := proto.Marshal(*m)
+	bodyBytes, err := proto.Marshal(*message)
 	if err != nil {
-		return []byte{}, err
+		return nil, err
 	}
 
-	dataMsg := make([]byte, 0)
+	// 构建消息：tag + body
+	payload := append(tag, bodyBytes...)
 
-	dataMsg = append(dataMsg, tagData...)
-	dataMsg = append(dataMsg, msgBodyData...)
+	// 校验和
+	checksum := adler32.Checksum(payload)
+	checksumBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksumBuf, checksum)
 
-	checkSum := adler32.Checksum(dataMsg)
-	checkSumData := make([]byte, 4)
-	binary.BigEndian.PutUint32(checkSumData, checkSum)
-	dataMsg = append(dataMsg, checkSumData...)
+	// 加上头部长度
+	packet := make([]byte, 0, 4+len(payload)+4)
+	lengthBuf := make([]byte, 4)
+	binary.BigEndian.PutUint32(lengthBuf, uint32(len(payload)+4)) // payload + checksum
 
-	lenMsg := len(dataMsg)
-	lenData := make([]byte, 4)
-	binary.BigEndian.PutUint32(lenData, uint32(lenMsg))
-	data := make([]byte, 0)
-	data = append(data, lenData...)
-	data = append(data, dataMsg...)
-	return data, nil
+	packet = append(packet, lengthBuf...)
+	packet = append(packet, payload...)
+	packet = append(packet, checksumBuf...)
+
+	return packet, nil
 }
 
 func (c *RpcCodec) Decode(data []byte) (proto.Message, uint32, error) {
-	//learn from zinx
 	if len(data) < 8 {
 		return nil, 0, nil
 	}
-	length := binary.BigEndian.Uint32(data[0:4])
-	if uint32(len(data)) < length {
+
+	packetLen := binary.BigEndian.Uint32(data[0:4])
+	if uint32(len(data)) < packetLen+4 {
 		return nil, 0, nil
 	}
 
-	msgName := protoreflect.FullName(GetDescriptor(&c.RpcMsgType).FullName())
-	msgType, err := protoregistry.GlobalTypes.FindMessageByName(msgName)
+	fullName := protoreflect.FullName(GetDescriptor(&c.RpcMsgType).FullName())
+	msgType, err := protoregistry.GlobalTypes.FindMessageByName(fullName)
 	if err != nil {
-		log.Println(err)
-		return nil, length, err
-	}
-	msg := proto.MessageV1(msgType.New())
-	err = proto.Unmarshal(data[8:length], msg)
-	if err != nil {
-		return nil, length, err
+		log.Println("Message type not found:", err)
+		return nil, packetLen, err
 	}
 
-	checkSum := adler32.Checksum(data[4:length])
-	checkSumData := binary.BigEndian.Uint32(data[length : length+4])
-	if checkSum != checkSumData {
-		log.Println("checksum")
+	msg := proto.MessageV1(msgType.New())
+	err = proto.Unmarshal(data[8:packetLen], msg)
+	if err != nil {
+		return nil, packetLen, err
 	}
-	length += 4
-	return msg, length, nil
+
+	checksum := adler32.Checksum(data[4:packetLen])
+	expectedChecksum := binary.BigEndian.Uint32(data[packetLen : packetLen+4])
+	if checksum != expectedChecksum {
+		log.Println("Checksum mismatch")
+	}
+
+	return msg, packetLen + 4, nil
 }
