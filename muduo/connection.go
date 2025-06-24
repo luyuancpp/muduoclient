@@ -48,11 +48,11 @@ func NewConnection(addr string, codec Codec) *Connection {
 	return c
 }
 
-// connectionManager 负责连接生命周期和重连逻辑
 func (c *Connection) connectionManager() {
 	defer c.wg.Done()
+
 	for {
-		if c.closed.Load() {
+		if c.IsClosed() {
 			return
 		}
 
@@ -66,21 +66,33 @@ func (c *Connection) connectionManager() {
 		c.setConn(conn)
 		log.Println("Connected to", c.addr)
 
+		// 清空旧 buffer
+		c.bufferMutex.Lock()
+		c.buffer.Reset()
+		c.bufferMutex.Unlock()
+
 		readCtx, readCancel := context.WithCancel(c.ctx)
 		writeCtx, writeCancel := context.WithCancel(c.ctx)
 
-		c.wg.Add(2)
-		go c.readLoop(readCtx, readCancel)
-		go c.writeLoop(writeCtx, writeCancel)
+		var rwg sync.WaitGroup
+		rwg.Add(2)
+		go func() {
+			defer rwg.Done()
+			c.readLoop(readCtx, readCancel)
+		}()
+		go func() {
+			defer rwg.Done()
+			c.writeLoop(writeCtx, writeCancel)
+		}()
 
-		// 等待读写协程退出（断线或关闭）
-		c.wg.Wait()
+		// 等待读写结束
+		rwg.Wait()
 
-		// 关闭当前连接
+		// 清理连接
 		c.closeConn()
 
-		// 如果主动关闭，退出重连
-		if c.closed.Load() {
+		// 如果是主动关闭则退出
+		if c.IsClosed() {
 			return
 		}
 
@@ -109,7 +121,6 @@ func (c *Connection) closeConn() {
 
 func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
-	defer c.wg.Done()
 
 	buf := make([]byte, 64*1024)
 	for {
@@ -122,12 +133,17 @@ func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 		c.writeMutex.Lock()
 		conn := c.conn
 		c.writeMutex.Unlock()
+
 		if conn == nil {
 			return
 		}
 
+		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		n, err := conn.Read(buf)
 		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue // 忽略超时，继续读取
+			}
 			if err == io.EOF {
 				log.Println("Connection closed by server")
 			} else {
@@ -135,6 +151,7 @@ func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 			}
 			return
 		}
+
 		if n > 0 {
 			c.bufferMutex.Lock()
 			c.buffer.Write(buf[:n])
@@ -147,8 +164,7 @@ func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 				if msgLen <= 0 {
 					break
 				}
-				c.buffer.Next(int(msgLen)) // 移除已解析数据
-
+				c.buffer.Next(int(msgLen))
 				select {
 				case c.incoming <- msg:
 				default:
@@ -162,7 +178,6 @@ func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 
 func (c *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
-	defer c.wg.Done()
 
 	for {
 		select {
@@ -172,6 +187,7 @@ func (c *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc) {
 			if !ok {
 				return
 			}
+
 			data, err := c.codec.Encode(&msg)
 			if err != nil {
 				log.Println("Encode error:", err)
@@ -181,9 +197,13 @@ func (c *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc) {
 			c.writeMutex.Lock()
 			conn := c.conn
 			c.writeMutex.Unlock()
+
 			if conn == nil {
+				log.Println("Write skipped: no active connection")
 				return
 			}
+
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
 			total := 0
 			for total < len(data) {
@@ -198,11 +218,15 @@ func (c *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc) {
 	}
 }
 
-// Send 发送消息，非阻塞
-func (c *Connection) Send(msg proto.Message) error {
-	if c.closed.Load() {
+func (c *Connection) Send(msg proto.Message) (err error) {
+	if c.IsClosed() {
 		return errors.New("connection closed")
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.New("send failed: connection closed")
+		}
+	}()
 	select {
 	case c.outgoing <- msg:
 		return nil
@@ -211,7 +235,6 @@ func (c *Connection) Send(msg proto.Message) error {
 	}
 }
 
-// Recv 获取收到的消息，阻塞等待
 func (c *Connection) Recv() (proto.Message, error) {
 	msg, ok := <-c.incoming
 	if !ok {
@@ -220,14 +243,18 @@ func (c *Connection) Recv() (proto.Message, error) {
 	return msg, nil
 }
 
-// Close 主动关闭连接和所有协程
 func (c *Connection) Close() {
 	if c.closed.CompareAndSwap(false, true) {
 		c.cancel()
 		c.closeConn()
+		// outgoing 关闭后，写协程才能退出
 		close(c.outgoing)
-		close(c.incoming)
+		// 不关闭 incoming，避免 panic（由接收方决定关闭）
 		c.wg.Wait()
 		log.Println("Connection closed cleanly")
 	}
+}
+
+func (c *Connection) IsClosed() bool {
+	return c.closed.Load()
 }
