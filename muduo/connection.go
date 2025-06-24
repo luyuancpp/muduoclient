@@ -17,19 +17,18 @@ type Connection struct {
 	addr  string
 	codec Codec
 
-	conn   net.Conn
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	netConn net.Conn // 原: conn
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 
 	incoming chan proto.Message
 	outgoing chan proto.Message
 
-	buffer      bytes.Buffer
+	recvBuffer  bytes.Buffer // 原: buffer
 	bufferMutex sync.Mutex
-
-	closed     atomic.Bool
-	writeMutex sync.Mutex
+	closed      atomic.Bool
+	writeMutex  sync.Mutex
 }
 
 // NewConnection 创建连接并启动管理协程，自动重连
@@ -48,51 +47,49 @@ func NewConnection(addr string, codec Codec) *Connection {
 	return c
 }
 
-func (c *Connection) connectionManager() {
-	defer c.wg.Done()
+func (conn *Connection) connectionManager() {
+	defer conn.wg.Done()
 
 	for {
-		if c.IsClosed() {
+		if conn.IsClosed() {
 			return
 		}
 
-		conn, err := net.Dial("tcp", c.addr)
+		netConn, err := net.Dial("tcp", conn.addr)
 		if err != nil {
 			log.Println("Connect failed:", err)
 			time.Sleep(time.Second)
 			continue
 		}
 
-		c.setConn(conn)
-		log.Println("Connected to", c.addr)
+		conn.setConn(netConn)
+		log.Println("Connected to", conn.addr)
 
 		// 清空旧 buffer
-		c.bufferMutex.Lock()
-		c.buffer.Reset()
-		c.bufferMutex.Unlock()
+		conn.bufferMutex.Lock()
+		conn.recvBuffer.Reset()
+		conn.bufferMutex.Unlock()
 
-		readCtx, readCancel := context.WithCancel(c.ctx)
-		writeCtx, writeCancel := context.WithCancel(c.ctx)
+		readCtx, readCancel := context.WithCancel(conn.ctx)
+		writeCtx, writeCancel := context.WithCancel(conn.ctx)
 
-		var rwg sync.WaitGroup
-		rwg.Add(2)
+		var rwGroup sync.WaitGroup
+		rwGroup.Add(2)
+
 		go func() {
-			defer rwg.Done()
-			c.readLoop(readCtx, readCancel)
+			defer rwGroup.Done()
+			conn.readLoop(readCtx, readCancel)
 		}()
 		go func() {
-			defer rwg.Done()
-			c.writeLoop(writeCtx, writeCancel)
+			defer rwGroup.Done()
+			conn.writeLoop(writeCtx, writeCancel)
 		}()
 
-		// 等待读写结束
-		rwg.Wait()
+		rwGroup.Wait()
 
-		// 清理连接
-		c.closeConn()
+		conn.closeConn()
 
-		// 如果是主动关闭则退出
-		if c.IsClosed() {
+		if conn.IsClosed() {
 			return
 		}
 
@@ -104,25 +101,25 @@ func (c *Connection) connectionManager() {
 func (c *Connection) setConn(conn net.Conn) {
 	c.writeMutex.Lock()
 	defer c.writeMutex.Unlock()
-	if c.conn != nil {
-		_ = c.conn.Close()
+	if c.netConn != nil {
+		_ = c.netConn.Close()
 	}
-	c.conn = conn
+	c.netConn = conn
 }
 
 func (c *Connection) closeConn() {
 	c.writeMutex.Lock()
 	defer c.writeMutex.Unlock()
-	if c.conn != nil {
-		_ = c.conn.Close()
-		c.conn = nil
+	if c.netConn != nil {
+		_ = c.netConn.Close()
+		c.netConn = nil
 	}
 }
 
-func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
+func (conn *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
 
-	buf := make([]byte, 64*1024)
+	readBuf := make([]byte, 64*1024)
 	for {
 		select {
 		case <-ctx.Done():
@@ -130,19 +127,19 @@ func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 		default:
 		}
 
-		c.writeMutex.Lock()
-		conn := c.conn
-		c.writeMutex.Unlock()
+		conn.writeMutex.Lock()
+		netConn := conn.netConn
+		conn.writeMutex.Unlock()
 
-		if conn == nil {
+		if netConn == nil {
 			return
 		}
 
-		_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-		n, err := conn.Read(buf)
+		_ = netConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		n, err := netConn.Read(readBuf)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				continue // 忽略超时，继续读取
+				continue
 			}
 			if err == io.EOF {
 				log.Println("Connection closed by server")
@@ -153,61 +150,61 @@ func (c *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 		}
 
 		if n > 0 {
-			c.bufferMutex.Lock()
-			c.buffer.Write(buf[:n])
+			conn.bufferMutex.Lock()
+			conn.recvBuffer.Write(readBuf[:n])
 			for {
-				msg, msgLen, err := c.codec.Decode(c.buffer.Bytes())
+				message, decodedLen, err := conn.codec.Decode(conn.recvBuffer.Bytes())
 				if err != nil {
 					log.Println("Decode error:", err)
 					break
 				}
-				if msgLen <= 0 {
+				if decodedLen <= 0 {
 					break
 				}
-				c.buffer.Next(int(msgLen))
+				conn.recvBuffer.Next(int(decodedLen))
 				select {
-				case c.incoming <- msg:
+				case conn.incoming <- message:
 				default:
 					log.Println("Incoming channel full, dropping message")
 				}
 			}
-			c.bufferMutex.Unlock()
+			conn.bufferMutex.Unlock()
 		}
 	}
 }
 
-func (c *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc) {
+func (conn *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-c.outgoing:
+		case message, ok := <-conn.outgoing:
 			if !ok {
 				return
 			}
 
-			data, err := c.codec.Encode(&msg)
+			data, err := conn.codec.Encode(&message)
 			if err != nil {
 				log.Println("Encode error:", err)
 				continue
 			}
 
-			c.writeMutex.Lock()
-			conn := c.conn
-			c.writeMutex.Unlock()
+			conn.writeMutex.Lock()
+			netConn := conn.netConn
+			conn.writeMutex.Unlock()
 
-			if conn == nil {
+			if netConn == nil {
 				log.Println("Write skipped: no active connection")
 				return
 			}
 
-			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_ = netConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
 			total := 0
 			for total < len(data) {
-				n, err := conn.Write(data[total:])
+				n, err := netConn.Write(data[total:])
 				if err != nil {
 					log.Println("Write error:", err)
 					return
