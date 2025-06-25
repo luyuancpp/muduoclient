@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +18,7 @@ type Connection struct {
 	addr  string
 	codec Codec
 
-	netConn net.Conn // 原 conn
+	netConn net.Conn
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -26,10 +27,13 @@ type Connection struct {
 	incoming chan proto.Message
 	outgoing chan proto.Message
 
-	recvBuffer  bytes.Buffer // 原 buffer
+	recvBuffer  bytes.Buffer
 	bufferMutex sync.Mutex
-	writeMutex  sync.Mutex
-	closed      atomic.Bool
+
+	connMutex  sync.Mutex // 保护 netConn 读写操作
+	writeMutex sync.Mutex // 保护写数据顺序性
+
+	closed atomic.Bool
 }
 
 // NewConnection 创建连接并启动管理协程，自动重连
@@ -100,8 +104,9 @@ func (conn *Connection) connectionManager() {
 }
 
 func (conn *Connection) setConn(netConn net.Conn) {
-	conn.writeMutex.Lock()
-	defer conn.writeMutex.Unlock()
+	conn.connMutex.Lock()
+	defer conn.connMutex.Unlock()
+
 	if conn.netConn != nil {
 		_ = conn.netConn.Close()
 	}
@@ -109,8 +114,9 @@ func (conn *Connection) setConn(netConn net.Conn) {
 }
 
 func (conn *Connection) closeConn() {
-	conn.writeMutex.Lock()
-	defer conn.writeMutex.Unlock()
+	conn.connMutex.Lock()
+	defer conn.connMutex.Unlock()
+
 	if conn.netConn != nil {
 		_ = conn.netConn.Close()
 		conn.netConn = nil
@@ -119,8 +125,8 @@ func (conn *Connection) closeConn() {
 
 func (conn *Connection) readLoop(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
-
 	readBuf := make([]byte, 64*1024)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -128,9 +134,9 @@ func (conn *Connection) readLoop(ctx context.Context, cancel context.CancelFunc)
 		default:
 		}
 
-		conn.writeMutex.Lock()
+		conn.connMutex.Lock()
 		netConn := conn.netConn
-		conn.writeMutex.Unlock()
+		conn.connMutex.Unlock()
 
 		if netConn == nil {
 			return
@@ -141,6 +147,10 @@ func (conn *Connection) readLoop(ctx context.Context, cancel context.CancelFunc)
 		if err != nil {
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				continue
+			}
+			// 重点判断和忽略“use of closed network connection”错误
+			if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
+				return
 			}
 			if err == io.EOF {
 				log.Println("Connection closed by server")
@@ -153,6 +163,7 @@ func (conn *Connection) readLoop(ctx context.Context, cancel context.CancelFunc)
 		if n > 0 {
 			conn.bufferMutex.Lock()
 			conn.recvBuffer.Write(readBuf[:n])
+
 			for {
 				message, decodedLen, err := conn.codec.Decode(conn.recvBuffer.Bytes())
 				if err != nil {
@@ -163,6 +174,7 @@ func (conn *Connection) readLoop(ctx context.Context, cancel context.CancelFunc)
 					break
 				}
 				conn.recvBuffer.Next(int(decodedLen))
+
 				select {
 				case conn.incoming <- message:
 				default:
@@ -192,9 +204,9 @@ func (conn *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc
 				continue
 			}
 
-			conn.writeMutex.Lock()
+			conn.connMutex.Lock()
 			netConn := conn.netConn
-			conn.writeMutex.Unlock()
+			conn.connMutex.Unlock()
 
 			if netConn == nil {
 				log.Println("Write skipped: no active connection")
@@ -203,15 +215,18 @@ func (conn *Connection) writeLoop(ctx context.Context, cancel context.CancelFunc
 
 			_ = netConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 
+			conn.writeMutex.Lock()
 			totalWritten := 0
 			for totalWritten < len(data) {
 				n, err := netConn.Write(data[totalWritten:])
 				if err != nil {
 					log.Println("Write error:", err)
+					conn.writeMutex.Unlock()
 					return
 				}
 				totalWritten += n
 			}
+			conn.writeMutex.Unlock()
 		}
 	}
 }
