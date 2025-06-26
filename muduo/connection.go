@@ -44,8 +44,8 @@ func NewConnection(addr string, codec Codec) *Connection {
 		codec:    codec,
 		ctx:      ctx,
 		cancel:   cancel,
-		incoming: make(chan proto.Message, 100),
-		outgoing: make(chan proto.Message, 100),
+		incoming: make(chan proto.Message, 10000),
+		outgoing: make(chan proto.Message, 10000),
 	}
 	conn.wg.Add(1)
 	go conn.connectionManager()
